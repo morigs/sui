@@ -776,7 +776,7 @@ impl TryFrom<MoveModulePublish> for SuiMovePackage {
 #[serde(rename = "TransactionData", rename_all = "camelCase")]
 pub struct SuiTransactionData {
     pub transactions: Vec<SuiTransactionKind>,
-    sender: SuiAddress,
+    pub sender: SuiAddress,
     gas_payment: SuiObjectRef,
     pub gas_budget: u64,
 }

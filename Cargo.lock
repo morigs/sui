@@ -6087,6 +6087,8 @@ dependencies = [
  "serde 1.0.137",
  "serde_json",
  "serde_with",
+ "strum",
+ "strum_macros",
  "sui-config",
  "sui-core",
  "sui-json",
@@ -6094,6 +6096,7 @@ dependencies = [
  "sui-open-rpc-macros",
  "sui-types",
  "tokio",
+ "tokio-stream",
  "tracing",
  "workspace-hack",
 ]
