@@ -887,6 +887,7 @@ impl<
         // Make an iterator to update the locks of the transaction's shared objects.
         let ids = certificate.shared_input_objects();
         let versions = self.schedule.multi_get(ids)?;
+        
         let ids = certificate.shared_input_objects();
         let res: Result<Vec<(_, _)>, SuiError> = ids
             .zip(versions.iter())
@@ -895,7 +896,7 @@ impl<
                 // sequence number (`OBJECT_START_VERSION`). Otherwise use the `scheduled` map to
                 // to assign the next sequence number.
                 let version = v.unwrap_or_else(|| OBJECT_START_VERSION);
-                if version.value() >= u64::MAX {
+                if version.value() == u64::MAX {
                     Err(SuiError::SequenceOverflow {
                         object_id: *id,
                     })
