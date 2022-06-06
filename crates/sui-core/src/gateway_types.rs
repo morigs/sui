@@ -255,7 +255,7 @@ impl<T: SuiMoveObject> SuiObject<T> {
     pub fn try_from(o: Object, layout: Option<MoveStructLayout>) -> Result<Self, anyhow::Error> {
         let oref = o.compute_object_reference();
         let data = match o.data {
-            Data::Move(m) => SuiData::MoveObject(T::try_from(m, layout)?),
+            Data::Move(m) => SuiData::MoveObject(T::try_from_layout(m, layout)?),
             Data::Package(p) => SuiData::Package(SuiMovePackage {
                 disassembled: p.disassemble()?,
             }),
@@ -307,10 +307,15 @@ fn indent<T: Display>(d: &T, indent: usize) -> String {
 }
 
 pub trait SuiMoveObject: Sized {
-    fn try_from(
+    fn try_from_layout(
         object: MoveObject,
         layout: Option<MoveStructLayout>,
     ) -> Result<Self, anyhow::Error>;
+
+    fn try_from(o: MoveObject, resolver: &impl GetModule) -> Result<Self, anyhow::Error> {
+        let layout = o.get_layout(ObjectFormatOptions::default(), resolver).ok();
+        Self::try_from_layout(o, layout)
+    }
 
     fn type_(&self) -> &str;
 }
@@ -349,11 +354,6 @@ impl SuiMoveObject for SuiParsedMoveObject {
         )
     }
 
-    fn try_from(o: MoveObject, resolver: &impl GetModule) -> Result<Self, anyhow::Error> {
-        let layout = o.get_layout(ObjectFormatOptions::default(), resolver).ok();
-        Self::try_from_layout(o, layout)
-    }
-
     fn type_(&self) -> &str {
         &self.type_
     }
@@ -371,7 +371,7 @@ pub struct SuiRawMoveObject {
 }
 
 impl SuiMoveObject for SuiRawMoveObject {
-    fn try_from(
+    fn try_from_layout(
         object: MoveObject,
         _layout: Option<MoveStructLayout>,
     ) -> Result<Self, anyhow::Error> {
@@ -1179,7 +1179,7 @@ pub struct OwnedObjectRef {
 #[serde(rename = "Event", rename_all = "camelCase")]
 pub enum SuiEvent {
     /// Move-specific event
-    MoveEvent(SuiMoveObject),
+    MoveEvent(SuiParsedMoveObject),
     /// Module published
     #[serde(rename_all = "camelCase")]
     Publish { package_id: ObjectID },

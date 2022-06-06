@@ -127,8 +127,8 @@ impl Event {
         resolver: &impl GetModule,
     ) -> Result<Option<MoveStruct>, SuiError> {
         match self {
-            Event::MoveEvent(event) => {
-                let typestruct = TypeTag::Struct(event.type_.clone());
+            Event::MoveEvent(event_obj) => {
+                let typestruct = TypeTag::Struct(event_obj.type_.clone());
                 let layout =
                     TypeLayoutBuilder::build_with_fields(&typestruct, resolver).map_err(|e| {
                         SuiError::ObjectSerializationError {
@@ -137,12 +137,11 @@ impl Event {
                     })?;
                 match layout {
                     MoveTypeLayout::Struct(l) => {
-                        let s =
-                            MoveStruct::simple_deserialize(event.contents(), &l).map_err(|e| {
-                                SuiError::ObjectSerializationError {
-                                    error: e.to_string(),
-                                }
-                            })?;
+                        let s = MoveStruct::simple_deserialize(event_obj.contents(), &l).map_err(
+                            |e| SuiError::ObjectSerializationError {
+                                error: e.to_string(),
+                            },
+                        )?;
                         Ok(Some(s))
                     }
                     _ => unreachable!(
