@@ -13,11 +13,13 @@ use async_trait::async_trait;
 use futures::future;
 use move_bytecode_utils::module_cache::ModuleCache;
 use move_core_types::identifier::Identifier;
-use move_core_types::language_storage::TypeTag;
+use move_core_types::language_storage::{ModuleId, TypeTag};
+use move_core_types::resolver::ModuleResolver;
 use once_cell::sync::Lazy;
 use prometheus_exporter::prometheus::{
     register_histogram, register_int_counter, Histogram, IntCounter,
 };
+use tokio::sync::Mutex;
 use tracing::{debug, error, Instrument};
 
 use sui_adapter::adapter::resolve_and_type_check;
@@ -167,6 +169,8 @@ impl Default for GatewayMetrics {
 // for cases such as local tests or "sui start" which starts multiple authorities in one process.
 pub static METRICS: Lazy<GatewayMetrics> = Lazy::new(GatewayMetrics::new);
 
+type SyncSendModuleCache<T> = Arc<Mutex<ModuleCache<T>>>;
+
 pub struct GatewayState<A> {
     authorities: AuthorityAggregator<A>,
     store: Arc<GatewayStore>,
@@ -177,6 +181,16 @@ pub struct GatewayState<A> {
     /// from a gateway.
     next_tx_seq_number: AtomicU64,
     metrics: &'static GatewayMetrics,
+    module_cache: SyncSendModuleCache<GatewayStoreWrapper>,
+}
+
+pub struct GatewayStoreWrapper(pub Arc<GatewayStore>);
+
+impl ModuleResolver for GatewayStoreWrapper {
+    type Error = SuiError;
+    fn get_module(&self, module_id: &ModuleId) -> Result<Option<Vec<u8>>, Self::Error> {
+        self.0.get_module(module_id)
+    }
 }
 
 impl<A> GatewayState<A> {
@@ -196,10 +210,11 @@ impl<A> GatewayState<A> {
         let store = Arc::new(GatewayStore::open(path, None));
         let next_tx_seq_number = AtomicU64::new(store.next_sequence_number()?);
         Ok(Self {
-            store,
+            store: store.clone(),
             authorities,
             next_tx_seq_number,
             metrics: &METRICS,
+            module_cache: Arc::new(Mutex::new(ModuleCache::new(GatewayStoreWrapper(store)))),
         })
     }
 
@@ -377,15 +392,17 @@ where
         object_id: &ObjectID,
     ) -> Result<SuiObject<T>, anyhow::Error> {
         let object = self.get_object_internal(object_id).await?;
-        self.to_sui_object(object)
+        self.to_sui_object(object).await
     }
 
-    fn to_sui_object<T: SuiMoveObject>(
+    async fn to_sui_object<T: SuiMoveObject>(
         &self,
         object: Object,
     ) -> Result<SuiObject<T>, anyhow::Error> {
-        let cache = ModuleCache::new(&*self.store);
-        let layout = object.get_layout(ObjectFormatOptions::default(), &cache)?;
+        let layout = object.get_layout(
+            ObjectFormatOptions::default(),
+            &*self.module_cache.lock().await,
+        )?;
         SuiObject::<T>::try_from(object, layout)
     }
 
@@ -623,9 +640,9 @@ where
                     }
                     .into()
                 );
-                updated_gas = Some(self.to_sui_object(object)?);
+                updated_gas = Some(self.to_sui_object(object).await?);
             } else {
-                created_objects.push(self.to_sui_object(object)?);
+                created_objects.push(self.to_sui_object(object).await?);
             }
         }
         let package = package
@@ -912,7 +929,10 @@ where
         return Ok(TransactionResponse::EffectResponse(
             TransactionEffectsResponse {
                 certificate: certificate.try_into()?,
-                effects: effects.into(),
+                effects: SuiTransactionEffects::try_from(
+                    effects,
+                    &*self.module_cache.lock().await,
+                )?,
             },
         ));
     }
@@ -1219,7 +1239,10 @@ where
         match opt {
             Some(certificate) => Ok(TransactionEffectsResponse {
                 certificate: certificate.try_into()?,
-                effects: self.store.get_effects(&digest)?.into(),
+                effects: SuiTransactionEffects::try_from(
+                    self.store.get_effects(&digest)?,
+                    &*self.module_cache.lock().await,
+                )?,
             }),
             None => Err(anyhow!(SuiError::TransactionNotFound { digest })),
         }

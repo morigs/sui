@@ -12,6 +12,7 @@ use std::fmt::{Display, Formatter};
 use colored::Colorize;
 use either::Either;
 use itertools::Itertools;
+use move_bytecode_utils::module_cache::GetModule;
 use move_core_types::identifier::Identifier;
 use move_core_types::language_storage::StructTag;
 use move_core_types::value::{MoveStruct, MoveStructLayout, MoveValue};
@@ -29,7 +30,7 @@ use sui_types::base_types::{
 use sui_types::committee::EpochId;
 use sui_types::crypto::{AuthorityQuorumSignInfo, Signature};
 use sui_types::error::SuiError;
-use sui_types::event::Event;
+use sui_types::event::{Event, MoveEvent, TransferType};
 use sui_types::gas::GasCostSummary;
 use sui_types::gas_coin::GasCoin;
 use sui_types::messages::{
@@ -37,8 +38,10 @@ use sui_types::messages::{
     SingleTransactionKind, TransactionData, TransactionEffects, TransactionKind,
 };
 use sui_types::move_package::disassemble_modules;
-use sui_types::object::{Data, MoveObject, Object, ObjectRead, Owner};
+use sui_types::object::{Data, MoveObject, Object, ObjectFormatOptions, ObjectRead, Owner};
 use sui_types::sui_serde::{Base64, Encoding};
+
+use sui_types::messages_checkpoint::CheckpointSequenceNumber;
 
 #[cfg(test)]
 #[path = "unit_tests/gateway_types_tests.rs"]
@@ -1012,6 +1015,33 @@ impl SuiTransactionEffects {
     pub fn mutated_excluding_gas(&self) -> impl Iterator<Item = &OwnedObjectRef> {
         self.mutated.iter().filter(|o| *o != &self.gas_object)
     }
+
+    pub fn try_from(
+        effect: TransactionEffects,
+        resolver: &impl GetModule,
+    ) -> Result<Self, anyhow::Error> {
+        Ok(Self {
+            status: effect.status.into(),
+            shared_objects: to_sui_object_ref(effect.shared_objects),
+            transaction_digest: effect.transaction_digest,
+            created: to_owned_ref(effect.created),
+            mutated: to_owned_ref(effect.mutated),
+            unwrapped: to_owned_ref(effect.unwrapped),
+            deleted: to_sui_object_ref(effect.deleted),
+            wrapped: to_sui_object_ref(effect.wrapped),
+            gas_object: OwnedObjectRef {
+                owner: effect.gas_object.1,
+                reference: effect.gas_object.0.into(),
+            },
+            events: effect
+                .events
+                .into_iter()
+                // TODO: figure out how to map the non-Move events
+                .map(|event| SuiEvent::try_from(event, resolver))
+                .collect::<Result<_, _>>()?,
+            dependencies: effect.dependencies,
+        })
+    }
 }
 
 impl Display for SuiTransactionEffects {
@@ -1061,38 +1091,6 @@ impl Display for SuiTransactionEffects {
             }
         }
         write!(f, "{}", writer)
-    }
-}
-
-impl From<TransactionEffects> for SuiTransactionEffects {
-    fn from(effect: TransactionEffects) -> Self {
-        Self {
-            status: effect.status.into(),
-            shared_objects: to_sui_object_ref(effect.shared_objects),
-            transaction_digest: effect.transaction_digest,
-            created: to_owned_ref(effect.created),
-            mutated: to_owned_ref(effect.mutated),
-            unwrapped: to_owned_ref(effect.unwrapped),
-            deleted: to_sui_object_ref(effect.deleted),
-            wrapped: to_sui_object_ref(effect.wrapped),
-            gas_object: OwnedObjectRef {
-                owner: effect.gas_object.1,
-                reference: effect.gas_object.0.into(),
-            },
-            events: effect
-                .events
-                .iter()
-                // TODO: figure out how to map the non-Move events
-                .filter_map(|event| match event {
-                    Event::MoveEvent { type_, contents } => Some(SuiEvent {
-                        type_: type_.to_string(),
-                        contents: contents.clone(),
-                    }),
-                    _ => None,
-                })
-                .collect(),
-            dependencies: effect.dependencies,
-        }
     }
 }
 
@@ -1173,12 +1171,91 @@ pub struct OwnedObjectRef {
 }
 
 #[derive(Eq, PartialEq, Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename = "Event", rename_all = "camelCase")]
+pub enum SuiEvent {
+    /// Move-specific event
+    MoveEvent(SuiMoveEvent),
+    /// Module published
+    #[serde(rename_all = "camelCase")]
+    Publish { package_id: ObjectID },
+    /// Transfer objects to new address / wrap in another object / coin
+    #[serde(rename_all = "camelCase")]
+    TransferObject {
+        object_id: ObjectID,
+        version: SequenceNumber,
+        destination_addr: SuiAddress,
+        type_: TransferType,
+    },
+    /// Delete object
+    DeleteObject(ObjectID),
+    /// New object creation
+    NewObject(ObjectID),
+    /// Epooch change
+    EpochChange(EpochId),
+    /// New checkpoint
+    Checkpoint(CheckpointSequenceNumber),
+}
+
+impl SuiEvent {
+    fn try_from(event: Event, resolver: &impl GetModule) -> Result<Self, anyhow::Error> {
+        Ok(match event {
+            Event::MoveEvent(event) => {
+                SuiEvent::MoveEvent(SuiMoveEvent::try_from(event, resolver)?)
+            }
+            Event::Publish { package_id } => SuiEvent::Publish { package_id },
+            Event::TransferObject {
+                object_id,
+                version,
+                destination_addr,
+                type_,
+            } => SuiEvent::TransferObject {
+                object_id,
+                version,
+                destination_addr,
+                type_,
+            },
+            Event::DeleteObject(id) => SuiEvent::DeleteObject(id),
+            Event::NewObject(id) => SuiEvent::NewObject(id),
+            Event::EpochChange(id) => SuiEvent::EpochChange(id),
+            Event::Checkpoint(seq) => SuiEvent::Checkpoint(seq),
+        })
+    }
+}
+
+#[derive(Eq, PartialEq, Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename = "MoveEvent", rename_all = "camelCase")]
+pub struct SuiMoveEvent {
+    pub type_: String,
+    pub fields: SuiMoveStruct,
+}
+
+impl SuiMoveEvent {
+    fn try_from(event: MoveEvent, resolver: &impl GetModule) -> Result<Self, anyhow::Error> {
+        let move_struct: SuiMoveStruct = event
+            .to_move_struct_with_resolver(ObjectFormatOptions::default(), resolver)?
+            .into();
+
+        // Remove duplicated type information
+        let fields = if let SuiMoveStruct::WithTypes { type_: _, fields } = move_struct {
+            SuiMoveStruct::WithFields(fields)
+        } else {
+            move_struct
+        };
+
+        Ok(Self {
+            type_: event.type_.to_string(),
+            fields,
+        })
+    }
+}
+
+/*#[derive(Eq, PartialEq, Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename = "Event")]
 // TODO: we need to reconstitute this for non Move events
 pub struct SuiEvent {
     pub type_: String,
     pub contents: Vec<u8>,
-}
+}*/
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename = "TransferCoin", rename_all = "camelCase")]
