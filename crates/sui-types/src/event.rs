@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use move_bytecode_utils::{layout::TypeLayoutBuilder, module_cache::GetModule};
-use move_core_types::value::MoveStructLayout;
 use move_core_types::{
     language_storage::{ModuleId, StructTag, TypeTag},
     value::{MoveStruct, MoveTypeLayout},
@@ -10,10 +9,10 @@ use move_core_types::{
 use name_variant::NamedVariant;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use serde_with::{serde_as, Bytes};
+use serde_with::serde_as;
 use strum_macros::EnumDiscriminants;
 
-use crate::object::ObjectFormatOptions;
+use crate::object::MoveObject;
 use crate::{
     base_types::{ObjectID, SequenceNumber, SuiAddress, TransactionDigest},
     committee::EpochId,
@@ -70,7 +69,7 @@ pub enum TransferType {
 #[strum_discriminants(name(EventType))]
 pub enum Event {
     /// Move-specific event
-    MoveEvent(MoveEvent),
+    MoveEvent(MoveObject),
     /// Module published
     Publish { package_id: ObjectID },
     /// Transfer objects to new address / wrap in another object / coin
@@ -92,7 +91,7 @@ pub enum Event {
 
 impl Event {
     pub fn move_event(type_: StructTag, contents: Vec<u8>) -> Self {
-        Event::MoveEvent(MoveEvent { type_, contents })
+        Event::MoveEvent(MoveObject::new(type_, contents))
     }
 
     /// Returns the EventType associated with an Event
@@ -139,7 +138,7 @@ impl Event {
                 match layout {
                     MoveTypeLayout::Struct(l) => {
                         let s =
-                            MoveStruct::simple_deserialize(&event.contents, &l).map_err(|e| {
+                            MoveStruct::simple_deserialize(event.contents(), &l).map_err(|e| {
                                 SuiError::ObjectSerializationError {
                                     error: e.to_string(),
                                 }
@@ -153,57 +152,5 @@ impl Event {
             }
             _ => Ok(None),
         }
-    }
-}
-
-#[serde_as]
-#[derive(Eq, Debug, Clone, PartialEq, Deserialize, Serialize, Hash)]
-pub struct MoveEvent {
-    pub type_: StructTag,
-    #[serde_as(as = "Bytes")]
-    pub contents: Vec<u8>,
-}
-
-impl MoveEvent {
-    /// Get a `MoveStructLayout` for `self`.
-    /// The `resolver` value must contain the module that declares `self.type_` and the (transitive)
-    /// dependencies of `self.type_` in order for this to succeed. Failure will result in an `ObjectSerializationError`
-    pub fn get_layout(
-        &self,
-        format: ObjectFormatOptions,
-        resolver: &impl GetModule,
-    ) -> Result<MoveStructLayout, SuiError> {
-        let type_ = TypeTag::Struct(self.type_.clone());
-        let layout = if format.include_types {
-            TypeLayoutBuilder::build_with_types(&type_, resolver)
-        } else {
-            TypeLayoutBuilder::build_with_fields(&type_, resolver)
-        }
-        .map_err(|e| SuiError::ObjectSerializationError {
-            error: e.to_string(),
-        })?;
-        match layout {
-            MoveTypeLayout::Struct(l) => Ok(l),
-            _ => unreachable!(
-                "We called build_with_types on Struct type, should get a struct layout"
-            ),
-        }
-    }
-    /// Convert `self` to the JSON representation dictated by `layout`.
-    pub fn to_move_struct(&self, layout: &MoveStructLayout) -> Result<MoveStruct, SuiError> {
-        MoveStruct::simple_deserialize(&self.contents, layout).map_err(|e| {
-            SuiError::ObjectSerializationError {
-                error: e.to_string(),
-            }
-        })
-    }
-
-    /// Convert `self` to the JSON representation dictated by `layout`.
-    pub fn to_move_struct_with_resolver(
-        &self,
-        format: ObjectFormatOptions,
-        resolver: &impl GetModule,
-    ) -> Result<MoveStruct, SuiError> {
-        self.to_move_struct(&self.get_layout(format, resolver)?)
     }
 }

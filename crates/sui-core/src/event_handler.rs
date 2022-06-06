@@ -1,7 +1,7 @@
 // Copyright (c) 2022, Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::authority::{AuthorityStore, AuthorityStoreWrapper};
+use crate::authority::{AuthorityStore, ResolverWrapper};
 use crate::streamer::Streamer;
 use chrono::prelude::*;
 use move_bytecode_utils::module_cache::SyncModuleCache;
@@ -23,7 +23,7 @@ pub fn get_unixtime_ms() -> u64 {
 }
 
 pub struct EventHandler {
-    module_cache: SyncModuleCache<AuthorityStoreWrapper>,
+    module_cache: SyncModuleCache<ResolverWrapper<AuthorityStore>>,
     streamer_queue: Sender<EventEnvelope>,
 }
 
@@ -32,7 +32,7 @@ impl EventHandler {
         let (tx, rx) = mpsc::channel::<EventEnvelope>(EVENT_DISPATCH_BUFFER_SIZE);
         Streamer::spawn(rx);
         Self {
-            module_cache: SyncModuleCache::new(AuthorityStoreWrapper(validator_store)),
+            module_cache: SyncModuleCache::new(ResolverWrapper(validator_store)),
             streamer_queue: tx,
         }
     }

@@ -30,7 +30,7 @@ use sui_types::base_types::{
 use sui_types::committee::EpochId;
 use sui_types::crypto::{AuthorityQuorumSignInfo, Signature};
 use sui_types::error::SuiError;
-use sui_types::event::{Event, MoveEvent, TransferType};
+use sui_types::event::{Event, TransferType};
 use sui_types::gas::GasCostSummary;
 use sui_types::gas_coin::GasCoin;
 use sui_types::messages::{
@@ -324,7 +324,7 @@ pub struct SuiParsedMoveObject {
 }
 
 impl SuiMoveObject for SuiParsedMoveObject {
-    fn try_from(
+    fn try_from_layout(
         object: MoveObject,
         layout: Option<MoveStructLayout>,
     ) -> Result<Self, anyhow::Error> {
@@ -347,6 +347,11 @@ impl SuiMoveObject for SuiParsedMoveObject {
                 }
             },
         )
+    }
+
+    fn try_from(o: MoveObject, resolver: &impl GetModule) -> Result<Self, anyhow::Error> {
+        let layout = o.get_layout(ObjectFormatOptions::default(), resolver).ok();
+        Self::try_from_layout(o, layout)
     }
 
     fn type_(&self) -> &str {
@@ -1174,7 +1179,7 @@ pub struct OwnedObjectRef {
 #[serde(rename = "Event", rename_all = "camelCase")]
 pub enum SuiEvent {
     /// Move-specific event
-    MoveEvent(SuiMoveEvent),
+    MoveEvent(SuiMoveObject),
     /// Module published
     #[serde(rename_all = "camelCase")]
     Publish { package_id: ObjectID },
@@ -1200,7 +1205,7 @@ impl SuiEvent {
     fn try_from(event: Event, resolver: &impl GetModule) -> Result<Self, anyhow::Error> {
         Ok(match event {
             Event::MoveEvent(event) => {
-                SuiEvent::MoveEvent(SuiMoveEvent::try_from(event, resolver)?)
+                SuiEvent::MoveEvent(SuiMoveObject::try_from(event, resolver)?)
             }
             Event::Publish { package_id } => SuiEvent::Publish { package_id },
             Event::TransferObject {
@@ -1221,41 +1226,6 @@ impl SuiEvent {
         })
     }
 }
-
-#[derive(Eq, PartialEq, Clone, Debug, Serialize, Deserialize, JsonSchema)]
-#[serde(rename = "MoveEvent", rename_all = "camelCase")]
-pub struct SuiMoveEvent {
-    pub type_: String,
-    pub fields: SuiMoveStruct,
-}
-
-impl SuiMoveEvent {
-    fn try_from(event: MoveEvent, resolver: &impl GetModule) -> Result<Self, anyhow::Error> {
-        let move_struct: SuiMoveStruct = event
-            .to_move_struct_with_resolver(ObjectFormatOptions::default(), resolver)?
-            .into();
-
-        // Remove duplicated type information
-        let fields = if let SuiMoveStruct::WithTypes { type_: _, fields } = move_struct {
-            SuiMoveStruct::WithFields(fields)
-        } else {
-            move_struct
-        };
-
-        Ok(Self {
-            type_: event.type_.to_string(),
-            fields,
-        })
-    }
-}
-
-/*#[derive(Eq, PartialEq, Clone, Debug, Serialize, Deserialize, JsonSchema)]
-#[serde(rename = "Event")]
-// TODO: we need to reconstitute this for non Move events
-pub struct SuiEvent {
-    pub type_: String,
-    pub contents: Vec<u8>,
-}*/
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename = "TransferCoin", rename_all = "camelCase")]

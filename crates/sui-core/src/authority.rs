@@ -82,7 +82,7 @@ pub use temporary_store::AuthorityTemporaryStore;
 mod authority_store;
 use crate::gateway_types::SuiTransactionEffects;
 pub use authority_store::{
-    AuthorityStore, AuthorityStoreWrapper, GatewayStore, ReplicaStore, SuiDataStore,
+    AuthorityStore, GatewayStore, ReplicaStore, ResolverWrapper, SuiDataStore,
 };
 use sui_types::messages_checkpoint::{
     CheckpointRequest, CheckpointRequestType, CheckpointResponse,
@@ -243,7 +243,7 @@ pub struct AuthorityState {
 
     indexes: Option<Arc<IndexStore>>,
 
-    module_cache: SyncModuleCache<AuthorityStoreWrapper>, // TODO: use strategies (e.g. LRU?) to constraint memory usage
+    module_cache: SyncModuleCache<ResolverWrapper<AuthorityStore>>, // TODO: use strategies (e.g. LRU?) to constraint memory usage
 
     event_handler: Option<Arc<EventHandler>>,
 
@@ -835,7 +835,7 @@ impl AuthorityState {
             move_vm,
             database: store.clone(),
             indexes,
-            module_cache: SyncModuleCache::new(AuthorityStoreWrapper(store.clone())),
+            module_cache: SyncModuleCache::new(ResolverWrapper(store.clone())),
             // `event_handler` uses a separate in-mem cache from `module_cache`
             // this is because they largely deal with different types of MoveStructs
             event_handler: Some(Arc::new(EventHandler::new(store.clone()))),

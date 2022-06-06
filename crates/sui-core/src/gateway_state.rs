@@ -13,8 +13,7 @@ use async_trait::async_trait;
 use futures::future;
 use move_bytecode_utils::module_cache::ModuleCache;
 use move_core_types::identifier::Identifier;
-use move_core_types::language_storage::{ModuleId, TypeTag};
-use move_core_types::resolver::ModuleResolver;
+use move_core_types::language_storage::TypeTag;
 use once_cell::sync::Lazy;
 use prometheus_exporter::prometheus::{
     register_histogram, register_int_counter, Histogram, IntCounter,
@@ -36,6 +35,7 @@ use sui_types::{
     SUI_FRAMEWORK_ADDRESS,
 };
 
+use crate::authority::ResolverWrapper;
 use crate::transaction_input_checker;
 use crate::{
     authority::GatewayStore, authority_aggregator::AuthorityAggregator,
@@ -181,16 +181,7 @@ pub struct GatewayState<A> {
     /// from a gateway.
     next_tx_seq_number: AtomicU64,
     metrics: &'static GatewayMetrics,
-    module_cache: SyncSendModuleCache<GatewayStoreWrapper>,
-}
-
-pub struct GatewayStoreWrapper(pub Arc<GatewayStore>);
-
-impl ModuleResolver for GatewayStoreWrapper {
-    type Error = SuiError;
-    fn get_module(&self, module_id: &ModuleId) -> Result<Option<Vec<u8>>, Self::Error> {
-        self.0.get_module(module_id)
-    }
+    module_cache: SyncSendModuleCache<ResolverWrapper<GatewayStore>>,
 }
 
 impl<A> GatewayState<A> {
@@ -214,7 +205,7 @@ impl<A> GatewayState<A> {
             authorities,
             next_tx_seq_number,
             metrics: &METRICS,
-            module_cache: Arc::new(Mutex::new(ModuleCache::new(GatewayStoreWrapper(store)))),
+            module_cache: Arc::new(Mutex::new(ModuleCache::new(ResolverWrapper(store)))),
         })
     }
 
