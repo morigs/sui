@@ -255,7 +255,12 @@ impl<T: SuiMoveObject> SuiObject<T> {
     pub fn try_from(o: Object, layout: Option<MoveStructLayout>) -> Result<Self, anyhow::Error> {
         let oref = o.compute_object_reference();
         let data = match o.data {
-            Data::Move(m) => SuiData::MoveObject(T::try_from_layout(m, layout)?),
+            Data::Move(m) => {
+                let layout = layout.ok_or(SuiError::ObjectSerializationError {
+                    error: "Layout is required to convert Move object to json".to_owned(),
+                })?;
+                SuiData::MoveObject(T::try_from_layout(m, layout)?)
+            }
             Data::Package(p) => SuiData::Package(SuiMovePackage {
                 disassembled: p.disassemble()?,
             }),
@@ -307,13 +312,11 @@ fn indent<T: Display>(d: &T, indent: usize) -> String {
 }
 
 pub trait SuiMoveObject: Sized {
-    fn try_from_layout(
-        object: MoveObject,
-        layout: Option<MoveStructLayout>,
-    ) -> Result<Self, anyhow::Error>;
+    fn try_from_layout(object: MoveObject, layout: MoveStructLayout)
+        -> Result<Self, anyhow::Error>;
 
     fn try_from(o: MoveObject, resolver: &impl GetModule) -> Result<Self, anyhow::Error> {
-        let layout = o.get_layout(ObjectFormatOptions::default(), resolver).ok();
+        let layout = o.get_layout(ObjectFormatOptions::default(), resolver)?;
         Self::try_from_layout(o, layout)
     }
 
@@ -331,13 +334,9 @@ pub struct SuiParsedMoveObject {
 impl SuiMoveObject for SuiParsedMoveObject {
     fn try_from_layout(
         object: MoveObject,
-        layout: Option<MoveStructLayout>,
+        layout: MoveStructLayout,
     ) -> Result<Self, anyhow::Error> {
-        let move_struct = object
-            .to_move_struct(&layout.ok_or(SuiError::ObjectSerializationError {
-                error: "Layout is required to convert Move object to json".to_owned(),
-            })?)?
-            .into();
+        let move_struct = object.to_move_struct(&layout)?.into();
 
         Ok(
             if let SuiMoveStruct::WithTypes { type_, fields } = move_struct {
@@ -373,7 +372,7 @@ pub struct SuiRawMoveObject {
 impl SuiMoveObject for SuiRawMoveObject {
     fn try_from_layout(
         object: MoveObject,
-        _layout: Option<MoveStructLayout>,
+        _layout: MoveStructLayout,
     ) -> Result<Self, anyhow::Error> {
         Ok(Self {
             type_: object.type_.to_string(),
