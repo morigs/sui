@@ -9,7 +9,6 @@ use move_core_types::{
 use name_variant::NamedVariant;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use serde_with::serde_as;
 use strum_macros::EnumDiscriminants;
 
 use crate::object::MoveObject;
@@ -62,7 +61,6 @@ pub enum TransferType {
 }
 
 /// Specific type of event
-#[serde_as]
 #[derive(
     Eq, Debug, Clone, PartialEq, NamedVariant, Deserialize, Serialize, Hash, EnumDiscriminants,
 )]
