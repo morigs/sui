@@ -1202,7 +1202,7 @@ pub enum SuiEvent {
 }
 
 impl SuiEvent {
-    fn try_from(event: Event, resolver: &impl GetModule) -> Result<Self, anyhow::Error> {
+    pub fn try_from(event: Event, resolver: &impl GetModule) -> Result<Self, anyhow::Error> {
         Ok(match event {
             Event::MoveEvent(event) => {
                 SuiEvent::MoveEvent(SuiMoveObject::try_from(event, resolver)?)
