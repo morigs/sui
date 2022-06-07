@@ -57,6 +57,7 @@ use sui_types::{
     storage::{BackingPackageStore, DeleteKind, Storage},
     MOVE_STDLIB_ADDRESS, SUI_FRAMEWORK_ADDRESS, SUI_SYSTEM_STATE_OBJECT_ID,
 };
+use tokio_stream::wrappers::BroadcastStream;
 use tracing::{debug, error, instrument};
 use typed_store::Map;
 
@@ -84,6 +85,7 @@ use crate::gateway_types::SuiTransactionEffects;
 pub use authority_store::{
     AuthorityStore, GatewayStore, ReplicaStore, ResolverWrapper, SuiDataStore,
 };
+use sui_types::event::EventEnvelope;
 use sui_types::messages_checkpoint::{
     CheckpointRequest, CheckpointRequestType, CheckpointResponse,
 };
@@ -245,7 +247,7 @@ pub struct AuthorityState {
 
     module_cache: SyncModuleCache<ResolverWrapper<AuthorityStore>>, // TODO: use strategies (e.g. LRU?) to constraint memory usage
 
-    event_handler: Option<Arc<EventHandler>>,
+    event_handler: Arc<EventHandler>,
 
     /// The checkpoint store
     pub(crate) checkpoints: Option<Arc<Mutex<CheckpointStore>>>,
@@ -536,9 +538,9 @@ impl AuthorityState {
             .await?;
 
         // Each certificate only reaches here once
-        if let Some(event_handler) = &self.event_handler {
-            event_handler.process_events(&signed_effects.effects).await;
-        }
+        self.event_handler
+            .process_events(&signed_effects.effects)
+            .await;
 
         Ok(TransactionInfoResponse {
             signed_transaction: self.database.get_transaction(&transaction_digest)?,
@@ -838,7 +840,7 @@ impl AuthorityState {
             module_cache: SyncModuleCache::new(ResolverWrapper(store.clone())),
             // `event_handler` uses a separate in-mem cache from `module_cache`
             // this is because they largely deal with different types of MoveStructs
-            event_handler: Some(Arc::new(EventHandler::new(store.clone()))),
+            event_handler: Arc::new(EventHandler::new(store.clone())),
             checkpoints,
             batch_channels: tx,
             batch_notifier: Arc::new(
@@ -1019,6 +1021,10 @@ impl AuthorityState {
         let res = self.database.transactions_in_seq_range(start, end)?;
         debug!(?start, ?end, ?res, "Fetched transactions");
         Ok(res)
+    }
+
+    pub fn subscribe_event(&self) -> BroadcastStream<EventEnvelope> {
+        self.event_handler.subscribe()
     }
 
     pub fn get_recent_transactions(
